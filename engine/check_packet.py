@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""
+Check that a scenario's packet (.docx) agrees with its Response Matrix (.xlsx).
+
+    python3 check_packet.py "SCENARIO – Response Matrix.xlsx" "SCENARIO – Scenario Packet.docx"
+
+The game is built from the matrix, so the packet must say the same things. For every piece of text the game
+uses (answers, clues, red herrings, Major Clues, follow-ups, tripwires, endings, the briefing, the final-answer
+options), this looks for the same words in the packet. It also checks each answer's item and receptiveness
+label ("Q1 [C02, clue; opinion receptive]"), the ranking order and the question budget. Curly and straight quotes
+and line breaks are treated as the same. Prose that exists only in the packet (the timeline, the positions,
+the hidden payoff) is not checked, and neither is the start-screen pitch, which the packet words differently.
+
+Needs openpyxl and python-docx (pip3 install openpyxl python-docx).
+"""
+import difflib, os, re, sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from scenario_matrix import read_matrix
+
+try:
+    import docx
+    from docx.oxml.ns import qn
+except ImportError:
+    sys.exit("This needs python-docx: pip3 install python-docx")
+
+NUMBER_WORDS = {"eight": 8, "ten": 10, "twenty": 20, "twenty-five": 25, "thirty": 30, "thirty-five": 35, "forty": 40,
+                "forty-five": 45, "fifty": 50, "sixty": 60}
+
+
+def norm(s):
+    s = (s.replace("‘", "'").replace("’", "'").replace("“", '"').replace("”", '"')
+          .replace(" ", " ").replace("‑", "-"))
+    return " ".join(s.split())
+
+
+def packet_paragraphs(path):
+    """Every paragraph and table cell of the .docx, in order, as plain text."""
+    d = docx.Document(path)
+    out = []
+    for el in d.element.body.iter(qn("w:p")):
+        t = "".join((x.text or "") if x.tag == qn("w:t") else " " for x in el.iter(qn("w:t"), qn("w:br"), qn("w:tab")))
+        if t.strip():
+            out.append(norm(t))
+    return out
+
+
+def expected(s):
+    """(label, text) pairs the packet must contain, and (label, regex) pairs for labels whose layout can vary."""
+    W = {w["id"]: w for w in s.WITNESSES}
+    texts = [("Title", s.TITLE), ("Mystery", s.PUZZLE["mystery"]), ("Solution", s.PUZZLE["solution"]),
+             ("Player role", s.SETTING["player_role"]), ("Briefing", s.SETTING["briefing"]),
+             ("Controversy name", s.CONTROVERSY["name"]), ("Controversy summary", s.CONTROVERSY["summary"]),
+             ("Clause", s.CONTROVERSY["clause"]), ("Clause explainer", s.CONTROVERSY["clause_explainer"]),
+             ("Map file", s.MAP)]
+    for q in s.QUESTIONS:
+        texts += [(f"{q['id']} question", q["text"]), (f"{q['id']} angle", q["angle"]), (f"{q['id']} why it lands", q["tripwire_logic"])]
+    for w in s.WITNESSES:
+        n = w["name"]
+        texts += [(f"{n}: role", w["role"]), (f"{n}: public card", w["public_card"]), (f"{n}: stance", w["stance"]),
+                  (f"{n}: secret", w["secret"]), (f"{n}: location", w["location"]), (f"{n}: portrait", w["portrait"]),
+                  (f"{n}: walk-away text", s.TRIPWIRE_RESPONSES[w["id"]])]
+        for qid, a in s.RESPONSES[w["id"]].items():
+            texts.append((f"{n} {qid} answer", a["text"]))
+        f = s.FOLLOW_UPS[w["id"]]
+        texts += [(f"{n} follow-up: receptive option", f["good"]), (f"{n} follow-up: unreceptive option", f["bad"]),
+                  (f"{n} follow-up: explanation", f["why"]), (f"{n} follow-up: walk-away", f["walkout"])]
+    texts += [(f"Clue {k}", c["text"]) for k, c in s.CLUES.items()]
+    texts += [(f"Red herring {k}", r["text"]) for k, r in s.RED_HERRINGS.items()]
+    for k, st in s.RED_HERRING_SETS.items():
+        texts += [(f"Set {k} title", st["title"]), (f"Set {k} resolution", st["resolution"])]
+    for m in s.MAJOR_CLUES:
+        texts += [(f"{m['id']} title", m["title"]), (f"{m['id']} text", m["text"])]
+    texts += [(f"Ending: {k}", v) for k, v in s.ENDINGS.items()]
+    texts.append(("Ranking order", ", ".join(f"{i + 1}. {W[x]['name']}" for i, x in enumerate(s.BONUS_RANKING["answer"]))))
+
+    patterns = []
+    for w in s.WITNESSES:
+        for qid, a in s.RESPONSES[w["id"]].items():
+            kind = "clue" if a["item"] in s.CLUES else "red herring"
+            flag = "receptive" if qid in w["receptive_questions"] else "unreceptive"
+            patterns.append((f"{w['name']} {qid} label [{a['item']}, {kind}; opinion {flag}]", w["name"], qid,
+                             rf"\b{qid}\s*\[\s*{a['item']}\s*,\s*{kind}\s*;\s*opinion\s+{flag}\s*\]"))
+    return [(l, norm(t)) for l, t in texts if t], patterns
+
+
+def check(matrix_path, packet_path):
+    s, errors = read_matrix(matrix_path)
+    if errors:
+        return [f"The matrix itself has problems; fix those first ({len(errors)}, run scenario_matrix.py)"]
+    paras = packet_paragraphs(packet_path)
+    full = "\n".join(paras)
+    problems = []
+    texts, patterns = expected(s)
+    for label, t in texts:
+        if t in full:
+            continue
+        best = max(paras, key=lambda p: difflib.SequenceMatcher(None, t, p).ratio() if difflib.SequenceMatcher(None, t, p).real_quick_ratio() > 0.5 else 0)
+        sm = difflib.SequenceMatcher(None, t.split(), best.split(), autojunk=False)
+        # show only the matched stretch of the closest packet paragraph, word by word
+        blocks = [b for b in sm.get_matching_blocks() if b.size]
+        if blocks and sum(b.size for b in blocks) >= len(t.split()) * 0.5:
+            tw, pw = t.split(), best.split()
+            lo, hi = blocks[0].b, blocks[-1].b + blocks[-1].size
+            diffs = []
+            for op, a1, a2, b1, b2 in difflib.SequenceMatcher(None, tw, pw[lo:hi], autojunk=False).get_opcodes():
+                if op != "equal":
+                    diffs.append(f"matrix '{' '.join(tw[a1:a2])}' vs packet '{' '.join(pw[lo + b1:lo + b2])}'")
+            problems.append(f"{label}: packet wording differs: " + "; ".join(diffs[:4]))
+        else:
+            problems.append(f"{label}: not found in the packet: \"{t[:90]}{'…' if len(t) > 90 else ''}\"")
+    for label, name, qid, rx in patterns:
+        if not re.search(rx, full, re.I):
+            problems.append(f"{label}: the packet does not label this answer the same way")
+
+    # Final-answer options: the packet's final-answer paragraph must list every option the game offers
+    # (checked in one paragraph, since the names also appear elsewhere in the packet)
+    options = [("person", o) for o in s.PUZZLE["who_options"]] + [("place", o) for o in s.PUZZLE["where_options"]]
+    home = max(paras, key=lambda p: sum(norm(o) in p for _, o in options))
+    for kind, o in options:
+        if norm(o) not in home:
+            problems.append(f"Final answer: the packet's list of offered options is missing the {kind} \"{o}\"")
+    fa = s.PUZZLE["final_answer"]
+    for kind in ("who", "where"):
+        if norm(fa[kind]) not in home:
+            problems.append(f"Final answer: the correct {kind} (\"{fa[kind]}\") is not given with the options")
+
+    # Question budget: every "<number> questions" in the packet must be the budget (or the eight shared questions)
+    for m in re.finditer(r"\b(\d+|[a-z]+(?:-[a-z]+)?)\s+questions\b", full, re.I):
+        word = m.group(1).lower()
+        n = int(word) if word.isdigit() else NUMBER_WORDS.get(word)
+        if n is not None and n not in (s.QUESTION_BUDGET, len(s.QUESTIONS)):
+            ctx = full[max(0, m.start() - 40):m.end() + 10].replace("\n", " ")
+            problems.append(f"Question budget: the packet says '{m.group(0)}' but the matrix budget is {s.QUESTION_BUDGET} (…{ctx}…)")
+    return problems
+
+
+def main():
+    if len(sys.argv) != 3:
+        sys.exit(__doc__)
+    problems = check(sys.argv[1], sys.argv[2])
+    print("PACKET DISAGREES WITH THE MATRIX:" if problems else "OK: the packet matches the matrix")
+    for p in problems:
+        print(" -", p)
+    sys.exit(1 if problems else 0)
+
+
+if __name__ == "__main__":
+    main()

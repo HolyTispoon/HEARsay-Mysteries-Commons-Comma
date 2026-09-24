@@ -20,27 +20,30 @@ A game takes about 45 to 75 minutes. Progress can be saved from the sidebar (Sav
 | `index.html` | The compiled game. This is the only file a player needs, along with `assets/`. |
 | `assets/` | Witness portraits and the campus map. |
 | `engine/hearsay_engine.twee` | The generic game engine: SugarCube passages, JavaScript and CSS. It is the same for every scenario. |
-| `engine/build_twine.py` | Build script: validates the scenario, adds its data to the engine, and compiles `index.html` with Tweego. |
-| `scenario/commons_comma_data.py` | The scenario, all of it: witnesses, questions, answers, clues, red herrings, follow-ups and endings. |
-| `scenario/validate.py` | Checks the scenario's structural rules (tripwires, clue counts, receptiveness ranks) before a build. |
-| `scenario/build_packet.py` | Generates the designer's scenario packet (.docx) and response matrix (.xlsx). Needs `python-docx` and `openpyxl`. |
+| `engine/build_twine.py` | Build script: checks the scenario, adds its data to the engine, and compiles `index.html` with Tweego. |
+| `engine/scenario_matrix.py` | Reads the Response Matrix and checks the framework's rules (tripwires, clue counts, receptiveness ranks) and that the workbook agrees with itself. |
+| `engine/check_packet.py` | Checks that the scenario packet says the same things as the Response Matrix. |
+| `scenario/The Commons' Comma – Response Matrix.xlsx` | The scenario the game is built from: settings, story text, witnesses, questions, every answer, clues, red herrings, follow-ups, endings and the final-answer options. |
+| `scenario/The Commons' Comma – Scenario Packet.docx` | The designer's scenario packet: the same scenario written up for people, plus the timeline, the positions and the hidden payoff. Spoilers throughout. |
 | `source/story.twee` | The generated Twee source that `index.html` is compiled from. You can import it into Twine to inspect the passages. |
 
 ## Rebuild after editing the scenario
 
-Requirements: Python 3.8+ and [Tweego](https://www.motoslave.net/tweego/) 2.1+ (it ships with SugarCube 2). Put `tweego` on your PATH, or set `TWEEGO=/path/to/tweego`.
+Edit the Response Matrix and make the same change in the packet, then rebuild.
+
+Requirements: Python 3.8+ with `openpyxl` and `python-docx` (`pip3 install openpyxl python-docx`), and [Tweego](https://www.motoslave.net/tweego/) 2.1+ (it ships with SugarCube 2). Put `tweego` on your PATH, or set `TWEEGO=/path/to/tweego`.
 
 From the repository root:
 
 ```
-python3 engine/build_twine.py scenario/commons_comma_data.py --assets assets --out .
+python3 engine/build_twine.py "scenario/The Commons' Comma – Response Matrix.xlsx" --assets assets --out .
 ```
 
-The build stops if `validate.py` reports a problem. Open `index.html` to test, then commit.
+The build stops if the matrix breaks a rule or disagrees with itself, or if the packet disagrees with the matrix, and it lists each problem. Open `index.html` to test, then commit.
 
 ## Make a new scenario
 
-Copy `scenario/commons_comma_data.py`, replace the content while keeping the same structure, add the new portraits and map to an assets folder, generate a new `IFID` (any UUID, uppercase), and build into a new folder or repository. You don't need to change the engine.
+Copy the Response Matrix and the packet, replace the content while keeping the same sheets and columns, put a new `IFID` (any UUID, uppercase) on the Settings sheet, add the new portraits and map to an assets folder, and build into a new folder or repository. You don't need to change the engine.
 
 ## Credits
 
