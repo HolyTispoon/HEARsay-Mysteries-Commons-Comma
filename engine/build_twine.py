@@ -54,7 +54,7 @@ def scenario_json(d, asset_dir="assets"):
         "budget": d.QUESTION_BUDGET,
         "followup_bonus": FOLLOWUP_BONUS,
         "asset_dir": asset_dir,
-        "map": "campus-map.png",
+        "map": getattr(d, "MAP", "campus-map.png"),
         "puzzle": {
             "mystery": p["mystery"],
             "solution": p["solution"],
@@ -101,7 +101,7 @@ def copy(src, dst):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("scenario", help="path to the scenario data .py file")
-    ap.add_argument("--assets", required=True, help="folder holding campus-map.png and the portrait PNGs (searched recursively)")
+    ap.add_argument("--assets", required=True, help="folder holding the campus map and the portrait PNGs (searched recursively)")
     ap.add_argument("--out", required=True, help="output folder")
     ap.add_argument("--repo", action="store_true", help="also copy engine, scenario source and README into --out")
     a = ap.parse_args()
@@ -114,7 +114,8 @@ def main():
     # assets
     for w in d.WITNESSES:
         copy(find_file(a.assets, w["portrait"]), os.path.join(out, "assets", "portraits", w["portrait"]))
-    copy(find_file(a.assets, "campus-map.png"), os.path.join(out, "assets", "campus-map.png"))
+    map_file = getattr(d, "MAP", "campus-map.png")  # the scenario can name its map, e.g. a compressed .jpg
+    copy(find_file(a.assets, map_file), os.path.join(out, "assets", map_file))
 
     # twee
     data = json.dumps(scenario_json(d), ensure_ascii=False).replace("</", "<\\/")
