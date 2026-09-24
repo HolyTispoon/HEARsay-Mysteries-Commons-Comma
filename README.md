@@ -1,5 +1,7 @@
 # HEARsay Mysteries: The Commons' Comma
 
+**Play online: https://holytispoon.github.io/HEARsay-Mysteries-Commons-Comma/**
+
 A short investigative game about conversational receptiveness. You interview eight student witnesses on a university campus, and you get the most out of them by using the HEAR framework (**H**edge your claims, **E**mphasize agreement, **A**cknowledge the other perspective, **R**eframe to the positive), which comes from Julia Minson's research on conversational receptiveness.
 
 The game is built in [Twine 2](https://twinery.org) with the [SugarCube 2](https://www.motoslave.net/sugarcube/2/) story format.
