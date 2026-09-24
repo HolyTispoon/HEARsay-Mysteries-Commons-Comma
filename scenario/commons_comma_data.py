@@ -5,6 +5,7 @@ TITLE = "The Commons' Comma"
 SCENARIO_ID = "commons-comma"
 IFID = "61186C66-1FEC-4296-99AD-81162A1EF015"  # Twine story ID; keep fixed so players' saves survive rebuilds
 QUESTION_BUDGET = 40
+PLAY_URL = "https://holytispoon.github.io/HEARsay-Mysteries-Commons-Comma/"  # GitHub Pages URL, shown at the top of the README
 PITCH = ("The night before the university publicly examines its founding Charter to settle whether a disputed ink mark is a comma, "
          "the Charter vanishes from the archive. You have until five o'clock and forty questions to find out who took it, why, and where it is, "
          "by interviewing eight students who each know something and each have an opinion about the renovation the comma would decide.")

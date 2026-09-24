@@ -156,6 +156,8 @@ def main():
         if os.path.exists(readme):
             with open(readme, encoding="utf-8") as f:
                 txt = f.read().replace("{{TITLE}}", d.TITLE).replace("{{DATA}}", os.path.basename(a.scenario))
+            play_url = getattr(d, "PLAY_URL", "")  # the scenario's GitHub Pages URL; the line is omitted if unset
+            txt = txt.replace("{{PLAY_LINE}}", f"**Play online: {play_url}**\n\n" if play_url else "")
             with open(os.path.join(out, "README.md"), "w", encoding="utf-8") as f:
                 f.write(txt)
         open(os.path.join(out, ".nojekyll"), "w").close()
