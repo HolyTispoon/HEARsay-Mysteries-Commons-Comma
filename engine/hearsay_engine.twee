@@ -23,11 +23,11 @@
 
 
 :: StoryMenu
-<<link "Campus map">><<run setup.hs.go("Map")>><</link>>
-<<link "Evidence board">><<run setup.hs.go("Evidence Board")>><</link>>
-<<link "Case file">><<run setup.hs.go("Case File")>><</link>>
-<<link "HEAR guide">><<run setup.hs.go("HEAR Guide")>><</link>>
-<<link "Rules">><<run setup.hs.go("Rules Summary")>><</link>>
+<<link `setup.hs.T("menu.map")`>><<run setup.hs.go("Map")>><</link>>
+<<link `setup.hs.T("menu.evidence")`>><<run setup.hs.go("Evidence Board")>><</link>>
+<<link `setup.hs.T("menu.case_file")`>><<run setup.hs.go("Case File")>><</link>>
+<<link `setup.hs.T("menu.hear")`>><<run setup.hs.go("HEAR Guide")>><</link>>
+<<link `setup.hs.T("menu.rules")`>><<run setup.hs.go("Rules Summary")>><</link>>
 
 
 :: Start
@@ -97,8 +97,9 @@
 :: HearsayEngine [script]
 /* ==========================================================================
    HEARsay Mysteries — generic SugarCube 2 engine.
-   All scenario content lives in setup.scenario (written by build_twine.py).
-   Nothing in this file is specific to one scenario.
+   All scenario content lives in setup.scenario (from the scenario's Response Matrix), and every piece of
+   the game's own text lives in setup.gameText (from HEARsay game text.xlsx); build_twine.py writes both.
+   Nothing in this file is specific to one scenario, and no player-facing text is written here.
    ========================================================================== */
 
 /* No undo: a tripwire or a failed follow-up must stick. This also keeps saves small. */
@@ -113,7 +114,7 @@ Config.passages.nobr = false;
 	const V = () => State.variables;
 	const LETTERS = ["H", "E", "A", "R"];
 
-	/* ---------- tiny DOM helpers (all scenario text is inserted as text, never as markup) ---------- */
+	/* ---------- tiny DOM helpers (all text is inserted as text, never as markup) ---------- */
 	function el(tag, attrs, ...kids) {
 		const n = document.createElement(tag);
 		if (attrs) {
@@ -144,6 +145,29 @@ Config.passages.nobr = false;
 	function paras(text, cls) {
 		return String(text).split(/\n\s*\n/).map(t => para(t.trim(), cls));
 	}
+
+	/* ---------- game text (HEARsay game text.xlsx) ---------- */
+	const num = x => (x % 1 === 0.5 ? (Math.floor(x) || "") + "½" : String(x));
+	function vars(extra) {
+		const s = S();
+		return Object.assign({
+			budget: s.budget, n_witnesses: s.witnesses.length, n_questions: s.questions.length,
+			n_major: s.major_clues.length, bonus: s.followup_bonus, rank_exact: num(s.rank_exact),
+			rank_near: num(s.rank_near), ccc: s.controversy.name, title: s.title
+		}, extra || {});
+	}
+	/* The text for a key, with its {placeholders} filled in. */
+	function T(key, extra) {
+		const t = (setup.gameText || {})[key];
+		if (t === undefined) return "[missing text: " + key + "]";
+		const v = vars(extra);
+		return t.replace(/\{(\w+)\}/g, (m, k) => (k in v ? String(v[k]) : m));
+	}
+	/* The same, as nodes, with **double asterisks** shown bold. */
+	function R(key, extra) {
+		return T(key, extra).split(/\*\*(.+?)\*\*/).map((part, i) => (i % 2 ? el("strong", null, part) : part)).filter(p => p !== "");
+	}
+	const firstName = w => w.name.split(" ")[0];
 
 	/* ---------- scenario lookups ---------- */
 	const wit = id => S().witnesses.find(w => w.id === id);
@@ -222,29 +246,35 @@ Config.passages.nobr = false;
 	/* ---------- shared UI pieces ---------- */
 	function hearBadge() {
 		const got = V().majorClues;
-		return el("div", { class: "hs-hear", "aria-label": "HEAR letters earned: " + got + " of 4" },
+		return el("div", { class: "hs-hear", "aria-label": T("status.hear_aria", { n: got }) },
 			LETTERS.map((L, i) => el("span", { class: "hs-letter" + (i < got ? " on" : "") }, L)));
 	}
 	function statusBar() {
 		const v = V();
 		return el("div", { class: "hs-status" },
-			el("span", { class: "hs-budget" }, "Questions left: ", el("strong", null, String(v.questionsLeft)), " / " + S().budget),
+			el("span", { class: "hs-budget" }, R("status.questions_left", { left: v.questionsLeft })),
 			hearBadge());
 	}
 	function portrait(w, cls) {
-		return el("img", { class: "hs-portrait " + (cls || ""), src: S().asset_dir + "/portraits/" + w.portrait, alt: "Portrait of " + w.name });
+		return el("img", { class: "hs-portrait " + (cls || ""), src: S().asset_dir + "/portraits/" + w.portrait, alt: T("common.portrait_alt", { name: w.name }) });
 	}
 	function actionRow(...buttons) { return el("div", { class: "hs-actions" }, buttons); }
 	function solveButton() {
-		return btn("Solve the case", () => go("Submission"), "hs-solve");
+		return btn(T("common.solve"), () => go("Submission"), "hs-solve");
 	}
 	function forceSubmitIfBroke(out) {
 		if (V().questionsLeft <= 0 && !V().solved) {
 			out.appendChild(el("div", { class: "hs-alert" }, S().endings.out_of_questions));
-			out.appendChild(actionRow(btn("Submit your solution", () => go("Submission"), "hs-primary")));
+			out.appendChild(actionRow(btn(T("common.submit_now"), () => go("Submission"), "hs-primary")));
 			return true;
 		}
 		return false;
+	}
+	function ccc(out, s) {
+		/* The CCC as the Hook and the Case file show it; the clause and its explainer are optional. */
+		out.append(...paras(s.controversy.summary));
+		if (s.controversy.clause) out.append(el("blockquote", { class: "hs-clause" }, s.controversy.clause));
+		if (s.controversy.clause_explainer) out.append(...paras(s.controversy.clause_explainer));
 	}
 
 	/* ---------- views ---------- */
@@ -253,83 +283,68 @@ Config.passages.nobr = false;
 	view.start = function (out) {
 		out.append(
 			el("div", { class: "hs-title" },
-				el("div", { class: "hs-series" }, "A HEARsay Mystery"),
+				el("div", { class: "hs-series" }, T("start.series")),
 				el("h1", null, S().title),
 				el("p", { class: "hs-pitch" }, S().pitch)),
-			el("img", { class: "hs-map", src: S().asset_dir + "/" + S().map, alt: "Campus map" }),
-			actionRow(btn("Begin", () => go("Hook"), "hs-primary")));
+			el("img", { class: "hs-map", src: S().asset_dir + "/" + S().map, alt: T("common.map_alt") }),
+			actionRow(btn(T("start.begin"), () => go("Hook"), "hs-primary")));
 	};
 
 	view.hook = function (out) {
 		const s = S();
 		out.append(
-			el("h2", null, "Your assignment"),
+			el("h2", null, T("hook.assignment")),
 			...paras(s.setting.player_role),
 			el("blockquote", { class: "hs-brief" }, ...paras(s.setting.briefing)),
-			el("h3", null, "The mystery"),
+			el("h3", null, T("hook.mystery")),
 			para(s.puzzle.mystery, "hs-mystery"),
-			el("h3", null, "What the campus is fighting about: " + s.controversy.name),
-			...paras(s.controversy.summary),
-			el("blockquote", { class: "hs-clause" }, s.controversy.clause),
-			...paras(s.controversy.clause_explainer),
-			actionRow(btn("Read the rules", () => go("Rules"), "hs-primary")));
+			el("h3", null, T("hook.ccc")));
+		ccc(out, s);
+		out.append(actionRow(btn(T("hook.read_rules"), () => go("Rules"), "hs-primary")));
 	};
 
 	view.rules = function (out, firstTime) {
-		const s = S();
-		out.append(el("h2", null, "How to play"));
-		const items = [
-			"There are " + s.witnesses.length + " witnesses. You can interview each of them once, and ask any of the same " + s.questions.length + " questions in any order.",
-			"You have " + s.budget + " questions in total, across all witnesses. That is not enough to ask everything, so choose. Re-reading an answer you already have is free.",
-			"For each witness, one question is a tripwire: it offends them and they walk away for good. The tripwire costs a question. Read each witness's background card for hints about what they would resent.",
-			"Every answer gives you a piece of information and the witness's opinion about " + s.controversy.name + ". Some information is useful, some is a red herring that a careful reasoner can rule out.",
-			"Pay attention to how each witness expresses their opinion. Some do it receptively, using HEAR; some do not. At the end you will rank the witnesses from most to least receptive, for bonus points.",
-			"Once per witness, after any answer, you may ask a follow-up about their opinion. You pick between two phrasings. The receptive phrasing earns the next Major Clue and the next letter of H-E-A-R. The other one ends the interview. Follow-ups do not cost a question.",
-			"There are " + s.major_clues.length + " Major Clues. Together they make the solution clear. A successful follow-up after all of them are earned gives bonus points.",
-			"You can solve the case at any time, but only once. When your questions run out, you must submit.",
-			"The Evidence board keeps everything you have learned. The HEAR guide and these rules are always in the sidebar."
-		];
-		out.append(el("ol", { class: "hs-rules" }, items.map(t => el("li", null, t))));
-		if (firstTime) out.append(actionRow(btn("Go to the campus map", () => go("Map"), "hs-primary")));
-		else out.append(actionRow(btn("Return", () => go(V().lastMain || "Map"))));
+		out.append(el("h2", null, T("rules.title")));
+		/* rules.1, rules.2, … in number order, so rules can be added or removed in the workbook */
+		const keys = Object.keys(setup.gameText || {}).filter(k => /^rules\.\d+$/.test(k))
+			.sort((a, b) => Number(a.split(".")[1]) - Number(b.split(".")[1]));
+		out.append(el("ol", { class: "hs-rules" }, keys.map(k => el("li", null, T(k)))));
+		if (firstTime) out.append(actionRow(btn(T("rules.go_to_map"), () => go("Map"), "hs-primary")));
+		else out.append(actionRow(btn(T("common.return"), () => go(V().lastMain || "Map"))));
 	};
 
 	view.hearGuide = function (out) {
-		const g = [
-			["H", "Hedge your claims", "Signal that you might be wrong: “I think”, “it's possible that”, “I could be misreading this”."],
-			["E", "Emphasize agreement", "Name the common ground, even partial: “We both want…”, “I agree that…”."],
-			["A", "Acknowledge the other perspective", "Show you have understood the other view, accurately and fairly: “I understand that you…”, “You're right that…”."],
-			["R", "Reframe to the positive", "Say what you want rather than what you oppose, and avoid contradictions and dismissals such as “that's wrong” or “no one serious thinks…”."]
-		];
 		out.append(
-			el("h2", null, "The HEAR framework"),
-			para("Conversational receptiveness is a willingness to engage with opposing views, shown through the words you use. Research by Julia Minson and colleagues found four markers that make someone come across as receptive:"),
-			el("dl", { class: "hs-hearlist" }, g.map(([L, t, d]) => [el("dt", null, el("span", { class: "hs-letter on" }, L), " " + t), el("dd", null, d)])),
-			para("Unreceptive language states opinions flatly, generalizes about the other person, attributes motives, or dismisses them. Listen for both kinds as the witnesses talk about the controversy.", "hs-note"),
-			actionRow(btn("Return", () => go(V().lastMain || "Map"))));
+			el("h2", null, T("hear.title")),
+			para(T("hear.intro")),
+			el("dl", { class: "hs-hearlist" }, LETTERS.map(L => [
+				el("dt", null, el("span", { class: "hs-letter on" }, L), " " + T("hear." + L + ".move")),
+				el("dd", null, T("hear." + L + ".text"))])),
+			para(T("hear.unreceptive"), "hs-note"),
+			actionRow(btn(T("common.return"), () => go(V().lastMain || "Map"))));
 	};
 
 	view.caseFile = function (out) {
 		const s = S();
 		out.append(
-			el("h2", null, "Case file"),
-			el("h3", null, "The mystery"), para(s.puzzle.mystery, "hs-mystery"),
-			el("h3", null, "Your brief"), el("blockquote", { class: "hs-brief" }, ...paras(s.setting.briefing)),
-			el("h3", null, "The controversy: " + s.controversy.name), ...paras(s.controversy.summary),
-			el("blockquote", { class: "hs-clause" }, s.controversy.clause), ...paras(s.controversy.clause_explainer),
-			actionRow(btn("Return", () => go(V().lastMain || "Map"))));
+			el("h2", null, T("case.title")),
+			el("h3", null, T("case.mystery")), para(s.puzzle.mystery, "hs-mystery"),
+			el("h3", null, T("case.brief")), el("blockquote", { class: "hs-brief" }, ...paras(s.setting.briefing)),
+			el("h3", null, T("case.ccc")));
+		ccc(out, s);
+		out.append(actionRow(btn(T("common.return"), () => go(V().lastMain || "Map"))));
 	};
 
 	view.map = function (out) {
 		const v = V(), s = S();
-		out.append(statusBar(), el("h2", null, "Campus map"),
-			para("Choose a witness to interview. Their background card is shown before you ask anything.", "hs-note"));
+		out.append(statusBar(), el("h2", null, T("map.title")),
+			para(T("map.note"), "hs-note"));
 		const grid = el("div", { class: "hs-grid" });
 		for (const w of s.witnesses) {
 			const n = asked(w.id).length;
-			let status = n ? n + " asked" : "Not yet interviewed";
-			if (isClosed(w.id)) status = "Walked away";
-			else if (v.followUpUsed[w.id] === "good") status += " · follow-up used";
+			let status = n ? T("map.asked", { n: n }) : T("map.not_yet");
+			if (isClosed(w.id)) status = T("map.walked_away");
+			else if (v.followUpUsed[w.id] === "good") status += " " + T("map.follow_up_used");
 			grid.appendChild(el("button", {
 				class: "hs-card" + (isClosed(w.id) ? " closed" : ""), type: "button",
 				onclick: () => openWitness(w.id)
@@ -342,7 +357,7 @@ Config.passages.nobr = false;
 					el("div", { class: "hs-state" }, status))));
 		}
 		out.appendChild(grid);
-		if (!forceSubmitIfBroke(out)) out.appendChild(actionRow(btn("Evidence board", () => go("Evidence Board")), solveButton()));
+		if (!forceSubmitIfBroke(out)) out.appendChild(actionRow(btn(T("common.evidence"), () => go("Evidence Board")), solveButton()));
 	};
 
 	view.interview = function (out) {
@@ -355,17 +370,17 @@ Config.passages.nobr = false;
 				el("div", null,
 					el("h2", null, w.name),
 					el("div", { class: "hs-role" }, w.role),
-					el("div", { class: "hs-loc" }, "Found at: " + w.location),
+					el("div", { class: "hs-loc" }, T("interview.found_at", { location: w.location })),
 					para(w.public_card, "hs-cardtext"))));
 		if (isClosed(w.id)) {
-			out.appendChild(el("div", { class: "hs-alert" }, w.name + " has walked away and will not answer any more questions."));
+			out.appendChild(el("div", { class: "hs-alert" }, T("interview.closed", { name: w.name })));
 		}
 		const list = el("div", { class: "hs-questions" });
 		for (const qq of s.questions) {
 			const done = asked(w.id).includes(qq.id);
 			const row = el("div", { class: "hs-q" + (done ? " done" : "") });
 			if (done) {
-				row.appendChild(btn("Re-read: " + qq.text, () => ask(w.id, qq.id), "hs-qbtn done"));
+				row.appendChild(btn(T("interview.reread", { question: qq.text }), () => ask(w.id, qq.id), "hs-qbtn done"));
 				const text = qq.id === w.tripwire ? s.tripwire_responses[w.id] : s.responses[w.id][qq.id].text;
 				row.appendChild(el("div", { class: "hs-transcript" }, text));
 			} else {
@@ -375,8 +390,8 @@ Config.passages.nobr = false;
 		}
 		out.appendChild(list);
 		if (forceSubmitIfBroke(out)) return;
-		const acts = [btn("Back to map", () => go("Map"))];
-		if (canFollowUp(w.id)) acts.push(btn("Ask a follow-up about their opinion", () => go("Follow-up"), "hs-follow"));
+		const acts = [btn(T("common.back_to_map"), () => go("Map"))];
+		if (canFollowUp(w.id)) acts.push(btn(T("common.ask_follow_up"), () => go("Follow-up"), "hs-follow"));
 		acts.push(solveButton());
 		out.appendChild(actionRow(...acts));
 	};
@@ -390,16 +405,16 @@ Config.passages.nobr = false;
 			el("div", { class: "hs-exchange" },
 				portrait(w, "small"),
 				el("div", null,
-					el("div", { class: "hs-asked" }, "You asked " + w.name + ":"),
+					el("div", { class: "hs-asked" }, T("answer.you_asked", { name: w.name })),
 					el("div", { class: "hs-question" }, "“" + qq.text + "”"))),
 			el("div", { class: "hs-answer" + (trip ? " trip" : "") },
 				trip ? s.tripwire_responses[w.id] : s.responses[w.id][qq.id].text));
-		if (trip) out.appendChild(el("div", { class: "hs-alert" }, "That was " + w.name + "'s tripwire. The interview is over."));
+		if (trip) out.appendChild(el("div", { class: "hs-alert" }, T("answer.tripwire", { name: w.name })));
 		if (forceSubmitIfBroke(out)) return;
 		const acts = [];
-		if (!isClosed(w.id)) acts.push(btn("Ask " + w.name.split(" ")[0] + " something else", () => go("Interview"), "hs-primary"));
-		if (canFollowUp(w.id)) acts.push(btn("Ask a follow-up about their opinion", () => go("Follow-up"), "hs-follow"));
-		acts.push(btn("Back to map", () => go("Map")), solveButton());
+		if (!isClosed(w.id)) acts.push(btn(T("answer.ask_else", { first_name: firstName(w) }), () => go("Interview"), "hs-primary"));
+		if (canFollowUp(w.id)) acts.push(btn(T("common.ask_follow_up"), () => go("Follow-up"), "hs-follow"));
+		acts.push(btn(T("common.back_to_map"), () => go("Map")), solveButton());
 		out.appendChild(actionRow(...acts));
 	};
 
@@ -413,11 +428,11 @@ Config.passages.nobr = false;
 		if (v.followUpOrder[w.id] === 1) opts.reverse();
 		out.append(statusBar(),
 			el("div", { class: "hs-exchange" }, portrait(w, "small"),
-				el("div", null, el("h2", null, "Follow-up with " + w.name),
-					para("Choose how to press " + w.name.split(" ")[0] + " about their view. You get one follow-up per witness, and it does not cost a question. Choose carefully: one phrasing will open them up, the other will end the interview.", "hs-note"))),
+				el("div", null, el("h2", null, T("followup.title", { name: w.name })),
+					para(T("followup.note", { first_name: firstName(w) }), "hs-note"))),
 			el("div", { class: "hs-choices" }, opts.map(([text, good]) =>
 				el("button", { class: "hs-choice", type: "button", onclick: () => chooseFollowUp(w.id, good) }, "“" + text + "”"))),
-			actionRow(btn("Not now", () => go("Interview"))));
+			actionRow(btn(T("followup.not_now"), () => go("Interview"))));
 	};
 
 	view.followUpResult = function (out) {
@@ -427,77 +442,77 @@ Config.passages.nobr = false;
 		const w = wit(r.wid), f = s.follow_ups[r.wid];
 		out.appendChild(statusBar());
 		if (r.good) {
-			out.appendChild(el("h2", null, w.name + " opens up"));
+			out.appendChild(el("h2", null, T("result_fu.opens_up", { name: w.name })));
 			if (r.mc !== null) {
 				const mc = s.major_clues[r.mc];
 				out.append(
 					el("div", { class: "hs-major" },
 						el("div", { class: "hs-major-head" }, el("span", { class: "hs-letter on big" }, mc.letter),
-							el("span", null, "Major Clue " + (r.mc + 1) + ": " + mc.title)),
+							el("span", null, T("result_fu.major", { n: r.mc + 1, mc_title: mc.title }))),
 						para(mc.text)));
 			} else {
-				out.appendChild(el("div", { class: "hs-major" }, para("You already hold every Major Clue, so " + w.name + " has nothing new to add, but the question lands well. Bonus: +" + s.followup_bonus + ".")));
+				out.appendChild(el("div", { class: "hs-major" }, para(T("result_fu.all_earned", { name: w.name }))));
 			}
-			out.append(el("h3", null, "Why that phrasing worked"), para(f.why, "hs-why"));
+			out.append(el("h3", null, T("result_fu.why")), para(f.why, "hs-why"));
 		} else {
-			out.append(el("h2", null, w.name + " walks away"), el("div", { class: "hs-answer trip" }, f.walkout),
-				el("div", { class: "hs-alert" }, "That follow-up was not receptive. " + w.name + "'s interview is over."));
+			out.append(el("h2", null, T("result_fu.walks_away", { name: w.name })), el("div", { class: "hs-answer trip" }, f.walkout),
+				el("div", { class: "hs-alert" }, T("result_fu.not_receptive", { name: w.name })));
 		}
 		if (forceSubmitIfBroke(out)) return;
 		const acts = [];
-		if (!isClosed(w.id)) acts.push(btn("Continue the interview", () => go("Interview"), "hs-primary"));
-		acts.push(btn("Back to map", () => go("Map")), btn("Evidence board", () => go("Evidence Board")), solveButton());
+		if (!isClosed(w.id)) acts.push(btn(T("result_fu.continue"), () => go("Interview"), "hs-primary"));
+		acts.push(btn(T("common.back_to_map"), () => go("Map")), btn(T("common.evidence"), () => go("Evidence Board")), solveButton());
 		out.appendChild(actionRow(...acts));
 	};
 
 	view.evidence = function (out) {
 		const v = V(), s = S();
-		out.append(statusBar(), el("h2", null, "Evidence board"));
-		out.appendChild(el("h3", null, "Major Clues"));
-		if (!v.majorClues) out.appendChild(para("None yet. Earn them with receptive follow-up questions.", "hs-note"));
+		out.append(statusBar(), el("h2", null, T("evidence.title")));
+		out.appendChild(el("h3", null, T("evidence.major")));
+		if (!v.majorClues) out.appendChild(para(T("evidence.major_none"), "hs-note"));
 		for (let i = 0; i < v.majorClues && i < s.major_clues.length; i++) {
 			const mc = s.major_clues[i];
 			out.appendChild(el("div", { class: "hs-major" },
 				el("div", { class: "hs-major-head" }, el("span", { class: "hs-letter on" }, mc.letter), el("span", null, mc.title)),
 				para(mc.text)));
 		}
-		out.appendChild(el("h3", null, "Notes (in the order you heard them)"));
-		if (!v.notebook.length) out.appendChild(para("Nothing yet.", "hs-note"));
+		out.appendChild(el("h3", null, T("evidence.notes")));
+		if (!v.notebook.length) out.appendChild(para(T("evidence.notes_none"), "hs-note"));
 		else out.appendChild(el("ol", { class: "hs-notes" }, v.notebook.map(n =>
-			el("li", null, itemText(n.item), el("span", { class: "hs-src" }, " — " + wit(n.wid).name + ", asked “" + q(n.qid).text + "”")))));
-		out.appendChild(el("h3", null, "Witnesses"));
+			el("li", null, itemText(n.item), el("span", { class: "hs-src" }, " " + T("evidence.source", { name: wit(n.wid).name, question: q(n.qid).text }))))));
+		out.appendChild(el("h3", null, T("evidence.witnesses")));
 		out.appendChild(el("ul", { class: "hs-notes" }, s.witnesses.map(w => {
-			const bits = [asked(w.id).length + " question(s) asked"];
-			if (isClosed(w.id)) bits.push(v.closedReason[w.id] === "tripwire" ? "walked away (tripwire)" : "walked away (follow-up)");
-			if (v.followUpUsed[w.id] === "good") bits.push("receptive follow-up");
+			const bits = [T("evidence.n_asked", { n: asked(w.id).length })];
+			if (isClosed(w.id)) bits.push(v.closedReason[w.id] === "tripwire" ? T("evidence.walked_tripwire") : T("evidence.walked_followup"));
+			if (v.followUpUsed[w.id] === "good") bits.push(T("evidence.good_followup"));
 			return el("li", null, el("strong", null, w.name), ": " + bits.join(", "));
 		})));
-		if (v.bonus) out.appendChild(para("Bonus points so far: " + v.bonus, "hs-note"));
-		out.appendChild(actionRow(btn("Return", () => go(v.lastMain || "Map")), btn("Campus map", () => go("Map"))));
+		if (v.bonus) out.appendChild(para(T("evidence.bonus", { points: v.bonus }), "hs-note"));
+		out.appendChild(actionRow(btn(T("common.return"), () => go(v.lastMain || "Map")), btn(T("common.map"), () => go("Map"))));
 	};
 
 	view.submission = function (out) {
 		const v = V(), s = S();
 		if (v.solved) { go("Result"); return; }
-		out.append(statusBar(), el("h2", null, "Solve the case"), para(s.puzzle.mystery, "hs-mystery"),
-			para("You can submit only once. Check your Evidence board first.", "hs-note"));
+		out.append(statusBar(), el("h2", null, T("submit.title")), para(s.puzzle.mystery, "hs-mystery"),
+			para(T("submit.once"), "hs-note"));
 		const mk = (label, opts) => {
 			const sel = el("select", { class: "hs-select" },
-				el("option", { value: "" }, "— choose —"), opts.map(o => el("option", { value: o }, o)));
+				el("option", { value: "" }, T("submit.choose")), opts.map(o => el("option", { value: o }, o)));
 			return [el("label", { class: "hs-label" }, label, sel), sel];
 		};
-		const [whoL, whoS] = mk("Who removed it?", s.puzzle.who_options);
-		const [whereL, whereS] = mk("Where is it now?", s.puzzle.where_options);
+		const [whoL, whoS] = mk(s.puzzle.who_label, s.puzzle.who_options);
+		const [whereL, whereS] = mk(s.puzzle.where_label, s.puzzle.where_options);
 		const msg = el("div", { class: "hs-alert", style: "display:none" });
 		out.append(whoL, whereL, msg);
-		const submit = btn("Submit my solution", () => {
-			if (!whoS.value || !whereS.value) { msg.textContent = "Choose an answer for both questions."; msg.style.display = ""; return; }
+		const submit = btn(T("submit.submit"), () => {
+			if (!whoS.value || !whereS.value) { msg.textContent = T("submit.both"); msg.style.display = ""; return; }
 			v.finalAnswer = { who: whoS.value, where: whereS.value };
 			v.solved = true;
 			Engine.play("Result");
 		}, "hs-primary");
 		const acts = [submit];
-		if (v.questionsLeft > 0) acts.unshift(btn("Keep investigating", () => go(v.lastMain && v.lastMain !== "Submission" ? v.lastMain : "Map")));
+		if (v.questionsLeft > 0) acts.unshift(btn(T("submit.keep_going"), () => go(v.lastMain && v.lastMain !== "Submission" ? v.lastMain : "Map")));
 		out.appendChild(actionRow(...acts));
 	};
 
@@ -513,13 +528,12 @@ Config.passages.nobr = false;
 		const v = V(), s = S();
 		const o = outcome();
 		if (!o) { go("Submission"); return; }
-		const label = { correct: "Case solved", right_person_wrong_place: "Half right", wrong: "Not solved" }[o];
-		out.append(el("h2", null, label),
-			para("You named " + v.finalAnswer.who + " and “" + v.finalAnswer.where + "”.", "hs-note"),
+		out.append(el("h2", null, T("result." + o)),
+			para(T("result.you_named", { who: v.finalAnswer.who, where: v.finalAnswer.where }), "hs-note"),
 			el("div", { class: "hs-ending " + o }, ...paras(s.endings[o])),
-			el("h3", null, "One more thing"),
-			para("Before the full story: how receptive was each witness? Rank them."),
-			actionRow(btn("Rank the witnesses", () => Engine.play("Ranking"), "hs-primary")));
+			el("h3", null, T("result.one_more")),
+			para(T("result.rank_prompt")),
+			actionRow(btn(T("result.rank_button"), () => Engine.play("Ranking"), "hs-primary")));
 	};
 
 	view.ranking = function (out) {
@@ -533,8 +547,8 @@ Config.passages.nobr = false;
 				[v.ranking[i], v.ranking[j]] = [v.ranking[j], v.ranking[i]];
 			}
 		}
-		out.append(el("h2", null, "Rank the witnesses by receptiveness"),
-			para("Put the most receptive witness at the top and the least receptive at the bottom. Think about how they talked about the controversy, not whether they were helpful. You score 1 point for each witness in exactly the right place and ½ for each one place off.", "hs-note"));
+		out.append(el("h2", null, T("ranking.title")),
+			para(T("ranking.note"), "hs-note"));
 		const list = el("ol", { class: "hs-rank" });
 		const render = () => {
 			list.textContent = "";
@@ -547,15 +561,15 @@ Config.passages.nobr = false;
 			});
 		};
 		render();
-		out.append(list, actionRow(btn("Submit ranking", () => { v.rankingDone = true; Engine.play("Ending"); }, "hs-primary")));
+		out.append(list, actionRow(btn(T("ranking.submit"), () => { v.rankingDone = true; Engine.play("Ending"); }, "hs-primary")));
 	};
 
 	function rankingScore() {
-		const v = V(), truth = S().ranking_answer;
+		const v = V(), s = S(), truth = s.ranking_answer;
 		let score = 0;
 		v.ranking.forEach((wid, i) => {
 			const d = Math.abs(truth.indexOf(wid) - i);
-			if (d === 0) score += 1; else if (d === 1) score += 0.5;
+			if (d === 0) score += s.rank_exact; else if (d === 1) score += s.rank_near;
 		});
 		return score;
 	}
@@ -567,29 +581,30 @@ Config.passages.nobr = false;
 		const o = outcome();
 		const rs = rankingScore();
 		const fmt = x => (x % 1 ? x.toFixed(1) : String(x));
-		out.append(el("h2", null, "Debrief"),
+		out.append(el("h2", null, T("ending.title")),
 			el("div", { class: "hs-score" },
-				el("div", null, "Verdict: ", el("strong", null, { correct: "solved", right_person_wrong_place: "half right", wrong: "not solved" }[o])),
-				el("div", null, "Major Clues earned: ", el("strong", null, v.majorClues + " of " + s.major_clues.length)),
-				el("div", null, "Receptiveness ranking: ", el("strong", null, fmt(rs) + " of " + s.witnesses.length)),
-				el("div", null, "Follow-up bonus: ", el("strong", null, String(v.bonus))),
-				el("div", null, "Questions used: ", el("strong", null, (s.budget - v.questionsLeft) + " of " + s.budget))));
-		out.appendChild(el("h3", null, "Receptiveness, most to least"));
+				el("div", null, R("ending.verdict", { verdict: T("ending.verdict." + o) })),
+				el("div", null, R("ending.major", { n: v.majorClues })),
+				el("div", null, R("ending.ranking", { score: fmt(rs) })),
+				el("div", null, R("ending.bonus", { points: v.bonus })),
+				el("div", null, R("ending.used", { n: s.budget - v.questionsLeft }))));
+		out.appendChild(el("h3", null, T("ending.table_title")));
 		out.appendChild(el("table", { class: "hs-table" },
-			el("tr", null, el("th", null, "Rank"), el("th", null, "Witness"), el("th", null, "Your rank"), el("th", null, "Receptive answers")),
+			el("tr", null, el("th", null, T("ending.col_rank")), el("th", null, T("ending.col_witness")),
+				el("th", null, T("ending.col_yours")), el("th", null, T("ending.col_receptive"))),
 			s.ranking_answer.map((wid, i) => el("tr", null,
 				el("td", null, String(i + 1)), el("td", null, wit(wid).name),
 				el("td", null, String(v.ranking.indexOf(wid) + 1)),
-				el("td", null, (s.witnesses.length - 1 - i) + " of " + (s.questions.length - 1))))));
-		out.append(el("h3", null, "What really happened"), ...paras(s.puzzle.solution));
-		if (o !== "correct") out.append(el("h3", null, "The full ending"), ...paras(s.endings.correct));
-		out.appendChild(el("h3", null, "The Major Clues"));
+				el("td", null, T("ending.receptive_of", { n: s.witnesses.length - 1 - i, total: s.questions.length - 1 }))))));
+		out.append(el("h3", null, T("ending.solution")), ...paras(s.puzzle.solution));
+		if (o !== "correct") out.append(el("h3", null, T("ending.full")), ...paras(s.endings.correct));
+		out.appendChild(el("h3", null, T("ending.major_title")));
 		s.major_clues.forEach(mc => out.appendChild(el("div", { class: "hs-major" },
 			el("div", { class: "hs-major-head" }, el("span", { class: "hs-letter on" }, mc.letter), el("span", null, mc.title)), para(mc.text))));
-		out.appendChild(el("h3", null, "The red herrings, and how each one falls apart"));
+		out.appendChild(el("h3", null, T("ending.herrings")));
 		out.appendChild(el("ul", { class: "hs-notes" }, Object.keys(s.red_herring_sets).map(k =>
 			el("li", null, el("strong", null, s.red_herring_sets[k].title + ": "), s.red_herring_sets[k].resolution))));
-		out.appendChild(actionRow(btn("Play again", () => Engine.restart(), "hs-primary")));
+		out.appendChild(actionRow(btn(T("ending.again"), () => Engine.restart(), "hs-primary")));
 	};
 
 	/* ---------- sidebar caption ---------- */
@@ -597,11 +612,11 @@ Config.passages.nobr = false;
 		const v = V(), s = S();
 		if (!s) return;
 		out.append(el("div", { class: "hs-cap" },
-			v.solved ? el("div", null, "Case submitted") : el("div", null, "Questions left: ", el("strong", null, String(v.questionsLeft))),
+			v.solved ? el("div", null, T("sidebar.submitted")) : el("div", null, R("sidebar.questions_left", { left: v.questionsLeft })),
 			hearBadge()));
 	}
 
-	setup.hs = { view, go, ask, openWitness, chooseFollowUp, caption, outcome };
+	setup.hs = { view, go, ask, openWitness, chooseFollowUp, caption, outcome, T };
 })();
 
 

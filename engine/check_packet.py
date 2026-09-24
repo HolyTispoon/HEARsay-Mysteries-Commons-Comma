@@ -5,11 +5,12 @@ Check that a scenario's packet (.docx) agrees with its Response Matrix (.xlsx).
     python3 check_packet.py "SCENARIO – Response Matrix.xlsx" "SCENARIO – Scenario Packet.docx"
 
 The game is built from the matrix, so the packet must say the same things. For every piece of text the game
-uses (answers, clues, red herrings, Major Clues, follow-ups, tripwires, endings, the briefing, the final-answer
+uses (answers, Clues, Red Herrings, Major Clues, follow-ups, tripwires, the Hook, the endings, the final-answer
 options), this looks for the same words in the packet. It also checks each answer's item and receptiveness
 label ("Q1 [C02, clue; opinion receptive]"), the ranking order and the question budget. Curly and straight quotes
 and line breaks are treated as the same. Prose that exists only in the packet (the timeline, the positions,
-the hidden payoff) is not checked, and neither is the start-screen pitch, which the packet words differently.
+the hidden payoff) is not checked, and neither are the Start summary and the two final-answer questions,
+which the packet words differently.
 
 Needs openpyxl and python-docx (pip3 install openpyxl python-docx).
 """
@@ -29,8 +30,8 @@ NUMBER_WORDS = {"eight": 8, "ten": 10, "twenty": 20, "twenty-five": 25, "thirty"
 
 
 def norm(s):
-    s = (s.replace("‘", "'").replace("’", "'").replace("“", '"').replace("”", '"')
-          .replace(" ", " ").replace("‑", "-"))
+    s = (s.replace("\u2018", "'").replace("\u2019", "'").replace("\u201c", '"').replace("\u201d", '"')
+          .replace("\u00a0", " ").replace("\u2011", "-"))
     return " ".join(s.split())
 
 
@@ -48,16 +49,16 @@ def packet_paragraphs(path):
 def expected(s):
     """(label, text) pairs the packet must contain, and (label, regex) pairs for labels whose layout can vary."""
     W = {w["id"]: w for w in s.WITNESSES}
-    texts = [("Title", s.TITLE), ("Mystery", s.PUZZLE["mystery"]), ("Solution", s.PUZZLE["solution"]),
-             ("Player role", s.SETTING["player_role"]), ("Briefing", s.SETTING["briefing"]),
-             ("Controversy name", s.CONTROVERSY["name"]), ("Controversy summary", s.CONTROVERSY["summary"]),
-             ("Clause", s.CONTROVERSY["clause"]), ("Clause explainer", s.CONTROVERSY["clause_explainer"]),
+    texts = [("Title", s.TITLE), ("The mystery", s.PUZZLE["mystery"]), ("The solution", s.PUZZLE["solution"]),
+             ("the Hook: Situation", s.SETTING["player_role"]), ("the Hook: Assignment", s.SETTING["briefing"]),
+             ("the Hook: CCC", s.CONTROVERSY["name"]), ("the Hook: CCC summary", s.CONTROVERSY["summary"]),
+             ("the Hook: Clause", s.CONTROVERSY["clause"]), ("the Hook: Clause explainer", s.CONTROVERSY["clause_explainer"]),
              ("Map file", s.MAP)]
     for q in s.QUESTIONS:
         texts += [(f"{q['id']} question", q["text"]), (f"{q['id']} angle", q["angle"]), (f"{q['id']} why it lands", q["tripwire_logic"])]
     for w in s.WITNESSES:
         n = w["name"]
-        texts += [(f"{n}: role", w["role"]), (f"{n}: public card", w["public_card"]), (f"{n}: stance", w["stance"]),
+        texts += [(f"{n}: role", w["role"]), (f"{n}: public card", w["public_card"]), (f"{n}: position on the CCC", w["stance"]),
                   (f"{n}: secret", w["secret"]), (f"{n}: location", w["location"]), (f"{n}: portrait", w["portrait"]),
                   (f"{n}: walk-away text", s.TRIPWIRE_RESPONSES[w["id"]])]
         for qid, a in s.RESPONSES[w["id"]].items():
@@ -66,12 +67,14 @@ def expected(s):
         texts += [(f"{n} follow-up: receptive option", f["good"]), (f"{n} follow-up: unreceptive option", f["bad"]),
                   (f"{n} follow-up: explanation", f["why"]), (f"{n} follow-up: walk-away", f["walkout"])]
     texts += [(f"Clue {k}", c["text"]) for k, c in s.CLUES.items()]
-    texts += [(f"Red herring {k}", r["text"]) for k, r in s.RED_HERRINGS.items()]
+    texts += [(f"Red Herring {k}", r["text"]) for k, r in s.RED_HERRINGS.items()]
     for k, st in s.RED_HERRING_SETS.items():
         texts += [(f"Set {k} title", st["title"]), (f"Set {k} resolution", st["resolution"])]
     for m in s.MAJOR_CLUES:
         texts += [(f"{m['id']} title", m["title"]), (f"{m['id']} text", m["text"])]
-    texts += [(f"Ending: {k}", v) for k, v in s.ENDINGS.items()]
+    labels = {"correct": "ending: Correct", "right_person_wrong_place": "ending: Right person, wrong place",
+              "wrong": "ending: Wrong", "out_of_questions": "Submission: Out of questions"}
+    texts += [(labels[k], v) for k, v in s.ENDINGS.items()]
     texts.append(("Ranking order", ", ".join(f"{i + 1}. {W[x]['name']}" for i, x in enumerate(s.BONUS_RANKING["answer"]))))
 
     patterns = []
@@ -119,19 +122,19 @@ def check(matrix_path, packet_path):
     home = max(paras, key=lambda p: sum(norm(o) in p for _, o in options))
     for kind, o in options:
         if norm(o) not in home:
-            problems.append(f"Final answer: the packet's list of offered options is missing the {kind} \"{o}\"")
+            problems.append(f"Final-answer form: the packet's list of offered options is missing the {kind} \"{o}\"")
     fa = s.PUZZLE["final_answer"]
     for kind in ("who", "where"):
         if norm(fa[kind]) not in home:
-            problems.append(f"Final answer: the correct {kind} (\"{fa[kind]}\") is not given with the options")
+            problems.append(f"Final-answer form: the correct {kind} (\"{fa[kind]}\") is not given with the options")
 
-    # Question budget: every "<number> questions" in the packet must be the budget (or the eight shared questions)
+    # Question budget (a framework fact): every "<number> questions" in the packet must be the budget (or the eight questions)
     for m in re.finditer(r"\b(\d+|[a-z]+(?:-[a-z]+)?)\s+questions\b", full, re.I):
         word = m.group(1).lower()
         n = int(word) if word.isdigit() else NUMBER_WORDS.get(word)
         if n is not None and n not in (s.QUESTION_BUDGET, len(s.QUESTIONS)):
             ctx = full[max(0, m.start() - 40):m.end() + 10].replace("\n", " ")
-            problems.append(f"Question budget: the packet says '{m.group(0)}' but the matrix budget is {s.QUESTION_BUDGET} (…{ctx}…)")
+            problems.append(f"Question budget: the packet says '{m.group(0)}' but the framework's budget is {s.QUESTION_BUDGET} (…{ctx}…)")
     return problems
 
 
