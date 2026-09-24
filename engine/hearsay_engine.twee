@@ -1,0 +1,702 @@
+:: StoryInit
+<<set $questionsLeft to setup.scenario.budget>>
+<<set $asked to {}>>
+<<set $closed to []>>
+<<set $closedReason to {}>>
+<<set $followUpUsed to {}>>
+<<set $followUpOrder to {}>>
+<<set $majorClues to 0>>
+<<set $notebook to []>>
+<<set $bonus to 0>>
+<<set $solved to false>>
+<<set $finalAnswer to null>>
+<<set $ranking to []>>
+<<set $rankingDone to false>>
+<<set $current to null>>
+<<set $currentQ to null>>
+<<set $lastFollowUp to null>>
+<<set $lastMain to "Start">>
+
+
+:: StoryCaption
+<<script>>setup.hs.caption(output)<</script>>
+
+
+:: StoryMenu
+<<link "Campus map">><<run setup.hs.go("Map")>><</link>>
+<<link "Evidence board">><<run setup.hs.go("Evidence Board")>><</link>>
+<<link "Case file">><<run setup.hs.go("Case File")>><</link>>
+<<link "HEAR guide">><<run setup.hs.go("HEAR Guide")>><</link>>
+<<link "Rules">><<run setup.hs.go("Rules Summary")>><</link>>
+
+
+:: Start
+<<script>>setup.hs.view.start(output)<</script>>
+
+
+:: Hook
+<<script>>setup.hs.view.hook(output)<</script>>
+
+
+:: Rules
+<<script>>setup.hs.view.rules(output, true)<</script>>
+
+
+:: Map
+<<script>>setup.hs.view.map(output)<</script>>
+
+
+:: Interview
+<<script>>setup.hs.view.interview(output)<</script>>
+
+
+:: Answer
+<<script>>setup.hs.view.answer(output)<</script>>
+
+
+:: Follow-up
+<<script>>setup.hs.view.followUp(output)<</script>>
+
+
+:: Follow-up Result
+<<script>>setup.hs.view.followUpResult(output)<</script>>
+
+
+:: Evidence Board [ref]
+<<script>>setup.hs.view.evidence(output)<</script>>
+
+
+:: Submission
+<<script>>setup.hs.view.submission(output)<</script>>
+
+
+:: Result
+<<script>>setup.hs.view.result(output)<</script>>
+
+
+:: Ranking
+<<script>>setup.hs.view.ranking(output)<</script>>
+
+
+:: Ending
+<<script>>setup.hs.view.ending(output)<</script>>
+
+
+:: Case File [ref]
+<<script>>setup.hs.view.caseFile(output)<</script>>
+
+
+:: HEAR Guide [ref]
+<<script>>setup.hs.view.hearGuide(output)<</script>>
+
+
+:: Rules Summary [ref]
+<<script>>setup.hs.view.rules(output, false)<</script>>
+
+
+:: HearsayEngine [script]
+/* ==========================================================================
+   HEARsay Mysteries — generic SugarCube 2 engine.
+   All scenario content lives in setup.scenario (written by build_twine.py).
+   Nothing in this file is specific to one scenario.
+   ========================================================================== */
+
+/* No undo: a tripwire or a failed follow-up must stick. This also keeps saves small. */
+Config.history.controls = false;
+Config.history.maxStates = 1;
+Config.passages.nobr = false;
+
+(function () {
+	"use strict";
+
+	const S = () => setup.scenario;
+	const V = () => State.variables;
+	const LETTERS = ["H", "E", "A", "R"];
+
+	/* ---------- tiny DOM helpers (all scenario text is inserted as text, never as markup) ---------- */
+	function el(tag, attrs, ...kids) {
+		const n = document.createElement(tag);
+		if (attrs) {
+			for (const k of Object.keys(attrs)) {
+				const v = attrs[k];
+				if (v === null || v === undefined || v === false) continue;
+				if (k === "class") n.className = v;
+				else if (k === "text") n.textContent = v;
+				else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+				else n.setAttribute(k, v === true ? "" : v);
+			}
+		}
+		for (const kid of kids.flat(Infinity)) {
+			if (kid === null || kid === undefined || kid === false) continue;
+			n.appendChild(typeof kid === "string" ? document.createTextNode(kid) : kid);
+		}
+		return n;
+	}
+	function btn(label, onClick, cls, disabled) {
+		return el("button", {
+			class: "hs-btn " + (cls || ""),
+			type: "button",
+			disabled: disabled ? true : null,
+			onclick: disabled ? null : onClick
+		}, label);
+	}
+	function para(text, cls) { return el("p", { class: cls || null }, text); }
+	function paras(text, cls) {
+		return String(text).split(/\n\s*\n/).map(t => para(t.trim(), cls));
+	}
+
+	/* ---------- scenario lookups ---------- */
+	const wit = id => S().witnesses.find(w => w.id === id);
+	const q = id => S().questions.find(x => x.id === id);
+	const itemText = id => (S().clues[id] || S().red_herrings[id] || "");
+	const asked = wid => V().asked[wid] || [];
+	const isClosed = wid => V().closed.includes(wid);
+	const heardAnswer = wid => asked(wid).some(qid => qid !== wit(wid).tripwire);
+	const lettersEarned = () => LETTERS.slice(0, Math.min(V().majorClues, 4));
+
+	function canFollowUp(wid) {
+		const v = V();
+		return !v.solved && !isClosed(wid) && heardAnswer(wid) && !v.followUpUsed[wid] && v.questionsLeft > 0;
+	}
+
+	/* ---------- navigation ---------- */
+	const REF = ["Case File", "HEAR Guide", "Rules Summary", "Evidence Board"];
+	function go(passage) {
+		const v = V();
+		if (v.solved && ["Map", "Interview", "Answer", "Follow-up", "Follow-up Result", "Submission"].includes(passage)) {
+			passage = v.rankingDone ? "Ending" : (v.ranking && v.ranking.length ? "Ranking" : "Result");
+		}
+		/* Defer so this is safe to call while another passage is still rendering. */
+		setTimeout(() => Engine.play(passage), 0);
+	}
+	$(document).on(":passagestart", ev => {
+		const name = ev.passage.title;
+		if (!REF.includes(name)) V().lastMain = name;
+	});
+
+	/* ---------- actions ---------- */
+	function openWitness(wid) {
+		V().current = wid;
+		go("Interview");
+	}
+	function ask(wid, qid) {
+		const v = V();
+		const w = wit(wid);
+		if (!v.asked[wid]) v.asked[wid] = [];
+		if (v.asked[wid].includes(qid)) {          // revisiting costs nothing
+			v.current = wid; v.currentQ = qid; go("Answer"); return;
+		}
+		if (isClosed(wid) || v.questionsLeft <= 0 || v.solved) { go("Map"); return; }
+		v.questionsLeft -= 1;
+		v.asked[wid].push(qid);
+		if (qid === w.tripwire) {
+			v.closed.push(wid);
+			v.closedReason[wid] = "tripwire";
+		} else {
+			const r = S().responses[wid][qid];
+			v.notebook.push({ item: r.item, wid: wid, qid: qid });
+		}
+		v.current = wid; v.currentQ = qid;
+		go("Answer");
+	}
+	function chooseFollowUp(wid, good) {
+		const v = V();
+		if (!canFollowUp(wid)) { go("Interview"); return; }
+		v.followUpUsed[wid] = good ? "good" : "bad";
+		if (good) {
+			if (v.majorClues < S().major_clues.length) {
+				v.lastFollowUp = { wid: wid, good: true, mc: v.majorClues };
+				v.majorClues += 1;
+			} else {
+				v.bonus += S().followup_bonus;
+				v.lastFollowUp = { wid: wid, good: true, mc: null };
+			}
+		} else {
+			v.closed.push(wid);
+			v.closedReason[wid] = "followup";
+			v.lastFollowUp = { wid: wid, good: false, mc: null };
+		}
+		go("Follow-up Result");
+	}
+
+	/* ---------- shared UI pieces ---------- */
+	function hearBadge() {
+		const got = V().majorClues;
+		return el("div", { class: "hs-hear", "aria-label": "HEAR letters earned: " + got + " of 4" },
+			LETTERS.map((L, i) => el("span", { class: "hs-letter" + (i < got ? " on" : "") }, L)));
+	}
+	function statusBar() {
+		const v = V();
+		return el("div", { class: "hs-status" },
+			el("span", { class: "hs-budget" }, "Questions left: ", el("strong", null, String(v.questionsLeft)), " / " + S().budget),
+			hearBadge());
+	}
+	function portrait(w, cls) {
+		return el("img", { class: "hs-portrait " + (cls || ""), src: S().asset_dir + "/portraits/" + w.portrait, alt: "Portrait of " + w.name });
+	}
+	function actionRow(...buttons) { return el("div", { class: "hs-actions" }, buttons); }
+	function solveButton() {
+		return btn("Solve the case", () => go("Submission"), "hs-solve");
+	}
+	function forceSubmitIfBroke(out) {
+		if (V().questionsLeft <= 0 && !V().solved) {
+			out.appendChild(el("div", { class: "hs-alert" }, S().endings.out_of_questions));
+			out.appendChild(actionRow(btn("Submit your solution", () => go("Submission"), "hs-primary")));
+			return true;
+		}
+		return false;
+	}
+
+	/* ---------- views ---------- */
+	const view = {};
+
+	view.start = function (out) {
+		out.append(
+			el("div", { class: "hs-title" },
+				el("div", { class: "hs-series" }, "A HEARsay Mystery"),
+				el("h1", null, S().title),
+				el("p", { class: "hs-pitch" }, S().pitch)),
+			el("img", { class: "hs-map", src: S().asset_dir + "/" + S().map, alt: "Campus map" }),
+			actionRow(btn("Begin", () => go("Hook"), "hs-primary")));
+	};
+
+	view.hook = function (out) {
+		const s = S();
+		out.append(
+			el("h2", null, "Your assignment"),
+			...paras(s.setting.player_role),
+			el("blockquote", { class: "hs-brief" }, ...paras(s.setting.briefing)),
+			el("h3", null, "The mystery"),
+			para(s.puzzle.mystery, "hs-mystery"),
+			el("h3", null, "What the campus is fighting about: " + s.controversy.name),
+			...paras(s.controversy.summary),
+			el("blockquote", { class: "hs-clause" }, s.controversy.clause),
+			...paras(s.controversy.clause_explainer),
+			actionRow(btn("Read the rules", () => go("Rules"), "hs-primary")));
+	};
+
+	view.rules = function (out, firstTime) {
+		const s = S();
+		out.append(el("h2", null, "How to play"));
+		const items = [
+			"There are " + s.witnesses.length + " witnesses. You can interview each of them once, and ask any of the same " + s.questions.length + " questions in any order.",
+			"You have " + s.budget + " questions in total, across all witnesses. That is not enough to ask everything, so choose. Re-reading an answer you already have is free.",
+			"For each witness, one question is a tripwire: it offends them and they walk away for good. The tripwire costs a question. Read each witness's background card for hints about what they would resent.",
+			"Every answer gives you a piece of information and the witness's opinion about " + s.controversy.name + ". Some information is useful, some is a red herring that a careful reasoner can rule out.",
+			"Pay attention to how each witness expresses their opinion. Some do it receptively, using HEAR; some do not. At the end you will rank the witnesses from most to least receptive, for bonus points.",
+			"Once per witness, after any answer, you may ask a follow-up about their opinion. You pick between two phrasings. The receptive phrasing earns the next Major Clue and the next letter of H-E-A-R. The other one ends the interview. Follow-ups do not cost a question.",
+			"There are " + s.major_clues.length + " Major Clues. Together they make the solution clear. A successful follow-up after all of them are earned gives bonus points.",
+			"You can solve the case at any time, but only once. When your questions run out, you must submit.",
+			"The Evidence board keeps everything you have learned. The HEAR guide and these rules are always in the sidebar."
+		];
+		out.append(el("ol", { class: "hs-rules" }, items.map(t => el("li", null, t))));
+		if (firstTime) out.append(actionRow(btn("Go to the campus map", () => go("Map"), "hs-primary")));
+		else out.append(actionRow(btn("Return", () => go(V().lastMain || "Map"))));
+	};
+
+	view.hearGuide = function (out) {
+		const g = [
+			["H", "Hedge your claims", "Signal that you might be wrong: “I think”, “it's possible that”, “I could be misreading this”."],
+			["E", "Emphasize agreement", "Name the common ground, even partial: “We both want…”, “I agree that…”."],
+			["A", "Acknowledge the other perspective", "Show you have understood the other view, accurately and fairly: “I understand that you…”, “You're right that…”."],
+			["R", "Reframe to the positive", "Say what you want rather than what you oppose, and avoid contradictions and dismissals such as “that's wrong” or “no one serious thinks…”."]
+		];
+		out.append(
+			el("h2", null, "The HEAR framework"),
+			para("Conversational receptiveness is a willingness to engage with opposing views, shown through the words you use. Research by Julia Minson and colleagues found four markers that make someone come across as receptive:"),
+			el("dl", { class: "hs-hearlist" }, g.map(([L, t, d]) => [el("dt", null, el("span", { class: "hs-letter on" }, L), " " + t), el("dd", null, d)])),
+			para("Unreceptive language states opinions flatly, generalizes about the other person, attributes motives, or dismisses them. Listen for both kinds as the witnesses talk about the controversy.", "hs-note"),
+			actionRow(btn("Return", () => go(V().lastMain || "Map"))));
+	};
+
+	view.caseFile = function (out) {
+		const s = S();
+		out.append(
+			el("h2", null, "Case file"),
+			el("h3", null, "The mystery"), para(s.puzzle.mystery, "hs-mystery"),
+			el("h3", null, "Your brief"), el("blockquote", { class: "hs-brief" }, ...paras(s.setting.briefing)),
+			el("h3", null, "The controversy: " + s.controversy.name), ...paras(s.controversy.summary),
+			el("blockquote", { class: "hs-clause" }, s.controversy.clause), ...paras(s.controversy.clause_explainer),
+			actionRow(btn("Return", () => go(V().lastMain || "Map"))));
+	};
+
+	view.map = function (out) {
+		const v = V(), s = S();
+		out.append(statusBar(), el("h2", null, "Campus map"),
+			para("Choose a witness to interview. Their background card is shown before you ask anything.", "hs-note"));
+		const grid = el("div", { class: "hs-grid" });
+		for (const w of s.witnesses) {
+			const n = asked(w.id).length;
+			let status = n ? n + " asked" : "Not yet interviewed";
+			if (isClosed(w.id)) status = "Walked away";
+			else if (v.followUpUsed[w.id] === "good") status += " · follow-up used";
+			grid.appendChild(el("button", {
+				class: "hs-card" + (isClosed(w.id) ? " closed" : ""), type: "button",
+				onclick: () => openWitness(w.id)
+			},
+				portrait(w, "small"),
+				el("div", { class: "hs-card-body" },
+					el("div", { class: "hs-name" }, w.name),
+					el("div", { class: "hs-role" }, w.role),
+					el("div", { class: "hs-loc" }, w.location),
+					el("div", { class: "hs-state" }, status))));
+		}
+		out.appendChild(grid);
+		if (!forceSubmitIfBroke(out)) out.appendChild(actionRow(btn("Evidence board", () => go("Evidence Board")), solveButton()));
+	};
+
+	view.interview = function (out) {
+		const v = V(), s = S();
+		const w = wit(v.current);
+		if (!w) { go("Map"); return; }
+		out.append(statusBar(),
+			el("div", { class: "hs-profile" },
+				portrait(w),
+				el("div", null,
+					el("h2", null, w.name),
+					el("div", { class: "hs-role" }, w.role),
+					el("div", { class: "hs-loc" }, "Found at: " + w.location),
+					para(w.public_card, "hs-cardtext"))));
+		if (isClosed(w.id)) {
+			out.appendChild(el("div", { class: "hs-alert" }, w.name + " has walked away and will not answer any more questions."));
+		}
+		const list = el("div", { class: "hs-questions" });
+		for (const qq of s.questions) {
+			const done = asked(w.id).includes(qq.id);
+			const row = el("div", { class: "hs-q" + (done ? " done" : "") });
+			if (done) {
+				row.appendChild(btn("Re-read: " + qq.text, () => ask(w.id, qq.id), "hs-qbtn done"));
+				const text = qq.id === w.tripwire ? s.tripwire_responses[w.id] : s.responses[w.id][qq.id].text;
+				row.appendChild(el("div", { class: "hs-transcript" }, text));
+			} else {
+				row.appendChild(btn(qq.text, () => ask(w.id, qq.id), "hs-qbtn", isClosed(w.id) || v.questionsLeft <= 0));
+			}
+			list.appendChild(row);
+		}
+		out.appendChild(list);
+		if (forceSubmitIfBroke(out)) return;
+		const acts = [btn("Back to map", () => go("Map"))];
+		if (canFollowUp(w.id)) acts.push(btn("Ask a follow-up about their opinion", () => go("Follow-up"), "hs-follow"));
+		acts.push(solveButton());
+		out.appendChild(actionRow(...acts));
+	};
+
+	view.answer = function (out) {
+		const v = V(), s = S();
+		const w = wit(v.current), qq = q(v.currentQ);
+		if (!w || !qq) { go("Map"); return; }
+		const trip = qq.id === w.tripwire;
+		out.append(statusBar(),
+			el("div", { class: "hs-exchange" },
+				portrait(w, "small"),
+				el("div", null,
+					el("div", { class: "hs-asked" }, "You asked " + w.name + ":"),
+					el("div", { class: "hs-question" }, "“" + qq.text + "”"))),
+			el("div", { class: "hs-answer" + (trip ? " trip" : "") },
+				trip ? s.tripwire_responses[w.id] : s.responses[w.id][qq.id].text));
+		if (trip) out.appendChild(el("div", { class: "hs-alert" }, "That was " + w.name + "'s tripwire. The interview is over."));
+		if (forceSubmitIfBroke(out)) return;
+		const acts = [];
+		if (!isClosed(w.id)) acts.push(btn("Ask " + w.name.split(" ")[0] + " something else", () => go("Interview"), "hs-primary"));
+		if (canFollowUp(w.id)) acts.push(btn("Ask a follow-up about their opinion", () => go("Follow-up"), "hs-follow"));
+		acts.push(btn("Back to map", () => go("Map")), solveButton());
+		out.appendChild(actionRow(...acts));
+	};
+
+	view.followUp = function (out) {
+		const v = V(), s = S();
+		const w = wit(v.current);
+		if (!w || !canFollowUp(w.id)) { go(w ? "Interview" : "Map"); return; }
+		if (v.followUpOrder[w.id] === undefined) v.followUpOrder[w.id] = Math.random() < 0.5 ? 0 : 1;
+		const f = s.follow_ups[w.id];
+		const opts = [[f.good, true], [f.bad, false]];
+		if (v.followUpOrder[w.id] === 1) opts.reverse();
+		out.append(statusBar(),
+			el("div", { class: "hs-exchange" }, portrait(w, "small"),
+				el("div", null, el("h2", null, "Follow-up with " + w.name),
+					para("Choose how to press " + w.name.split(" ")[0] + " about their view. You get one follow-up per witness, and it does not cost a question. Choose carefully: one phrasing will open them up, the other will end the interview.", "hs-note"))),
+			el("div", { class: "hs-choices" }, opts.map(([text, good]) =>
+				el("button", { class: "hs-choice", type: "button", onclick: () => chooseFollowUp(w.id, good) }, "“" + text + "”"))),
+			actionRow(btn("Not now", () => go("Interview"))));
+	};
+
+	view.followUpResult = function (out) {
+		const v = V(), s = S();
+		const r = v.lastFollowUp;
+		if (!r) { go("Map"); return; }
+		const w = wit(r.wid), f = s.follow_ups[r.wid];
+		out.appendChild(statusBar());
+		if (r.good) {
+			out.appendChild(el("h2", null, w.name + " opens up"));
+			if (r.mc !== null) {
+				const mc = s.major_clues[r.mc];
+				out.append(
+					el("div", { class: "hs-major" },
+						el("div", { class: "hs-major-head" }, el("span", { class: "hs-letter on big" }, mc.letter),
+							el("span", null, "Major Clue " + (r.mc + 1) + ": " + mc.title)),
+						para(mc.text)));
+			} else {
+				out.appendChild(el("div", { class: "hs-major" }, para("You already hold every Major Clue, so " + w.name + " has nothing new to add, but the question lands well. Bonus: +" + s.followup_bonus + ".")));
+			}
+			out.append(el("h3", null, "Why that phrasing worked"), para(f.why, "hs-why"));
+		} else {
+			out.append(el("h2", null, w.name + " walks away"), el("div", { class: "hs-answer trip" }, f.walkout),
+				el("div", { class: "hs-alert" }, "That follow-up was not receptive. " + w.name + "'s interview is over."));
+		}
+		if (forceSubmitIfBroke(out)) return;
+		const acts = [];
+		if (!isClosed(w.id)) acts.push(btn("Continue the interview", () => go("Interview"), "hs-primary"));
+		acts.push(btn("Back to map", () => go("Map")), btn("Evidence board", () => go("Evidence Board")), solveButton());
+		out.appendChild(actionRow(...acts));
+	};
+
+	view.evidence = function (out) {
+		const v = V(), s = S();
+		out.append(statusBar(), el("h2", null, "Evidence board"));
+		out.appendChild(el("h3", null, "Major Clues"));
+		if (!v.majorClues) out.appendChild(para("None yet. Earn them with receptive follow-up questions.", "hs-note"));
+		for (let i = 0; i < v.majorClues && i < s.major_clues.length; i++) {
+			const mc = s.major_clues[i];
+			out.appendChild(el("div", { class: "hs-major" },
+				el("div", { class: "hs-major-head" }, el("span", { class: "hs-letter on" }, mc.letter), el("span", null, mc.title)),
+				para(mc.text)));
+		}
+		out.appendChild(el("h3", null, "Notes (in the order you heard them)"));
+		if (!v.notebook.length) out.appendChild(para("Nothing yet.", "hs-note"));
+		else out.appendChild(el("ol", { class: "hs-notes" }, v.notebook.map(n =>
+			el("li", null, itemText(n.item), el("span", { class: "hs-src" }, " — " + wit(n.wid).name + ", asked “" + q(n.qid).text + "”")))));
+		out.appendChild(el("h3", null, "Witnesses"));
+		out.appendChild(el("ul", { class: "hs-notes" }, s.witnesses.map(w => {
+			const bits = [asked(w.id).length + " question(s) asked"];
+			if (isClosed(w.id)) bits.push(v.closedReason[w.id] === "tripwire" ? "walked away (tripwire)" : "walked away (follow-up)");
+			if (v.followUpUsed[w.id] === "good") bits.push("receptive follow-up");
+			return el("li", null, el("strong", null, w.name), ": " + bits.join(", "));
+		})));
+		if (v.bonus) out.appendChild(para("Bonus points so far: " + v.bonus, "hs-note"));
+		out.appendChild(actionRow(btn("Return", () => go(v.lastMain || "Map")), btn("Campus map", () => go("Map"))));
+	};
+
+	view.submission = function (out) {
+		const v = V(), s = S();
+		if (v.solved) { go("Result"); return; }
+		out.append(statusBar(), el("h2", null, "Solve the case"), para(s.puzzle.mystery, "hs-mystery"),
+			para("You can submit only once. Check your Evidence board first.", "hs-note"));
+		const mk = (label, opts) => {
+			const sel = el("select", { class: "hs-select" },
+				el("option", { value: "" }, "— choose —"), opts.map(o => el("option", { value: o }, o)));
+			return [el("label", { class: "hs-label" }, label, sel), sel];
+		};
+		const [whoL, whoS] = mk("Who removed it?", s.puzzle.who_options);
+		const [whereL, whereS] = mk("Where is it now?", s.puzzle.where_options);
+		const msg = el("div", { class: "hs-alert", style: "display:none" });
+		out.append(whoL, whereL, msg);
+		const submit = btn("Submit my solution", () => {
+			if (!whoS.value || !whereS.value) { msg.textContent = "Choose an answer for both questions."; msg.style.display = ""; return; }
+			v.finalAnswer = { who: whoS.value, where: whereS.value };
+			v.solved = true;
+			Engine.play("Result");
+		}, "hs-primary");
+		const acts = [submit];
+		if (v.questionsLeft > 0) acts.unshift(btn("Keep investigating", () => go(v.lastMain && v.lastMain !== "Submission" ? v.lastMain : "Map")));
+		out.appendChild(actionRow(...acts));
+	};
+
+	function outcome() {
+		const v = V(), s = S();
+		if (!v.finalAnswer) return null;
+		const who = v.finalAnswer.who === s.puzzle.final_answer.who;
+		const where = v.finalAnswer.where === s.puzzle.final_answer.where;
+		return who && where ? "correct" : (who ? "right_person_wrong_place" : "wrong");
+	}
+
+	view.result = function (out) {
+		const v = V(), s = S();
+		const o = outcome();
+		if (!o) { go("Submission"); return; }
+		const label = { correct: "Case solved", right_person_wrong_place: "Half right", wrong: "Not solved" }[o];
+		out.append(el("h2", null, label),
+			para("You named " + v.finalAnswer.who + " and “" + v.finalAnswer.where + "”.", "hs-note"),
+			el("div", { class: "hs-ending " + o }, ...paras(s.endings[o])),
+			el("h3", null, "One more thing"),
+			para("Before the full story: how receptive was each witness? Rank them."),
+			actionRow(btn("Rank the witnesses", () => Engine.play("Ranking"), "hs-primary")));
+	};
+
+	view.ranking = function (out) {
+		const v = V(), s = S();
+		if (!v.solved) { go("Map"); return; }
+		if (v.rankingDone) { go("Ending"); return; }
+		if (!v.ranking || v.ranking.length !== s.witnesses.length) {
+			v.ranking = s.witnesses.map(w => w.id);
+			for (let i = v.ranking.length - 1; i > 0; i--) {
+				const j = Math.floor(Math.random() * (i + 1));
+				[v.ranking[i], v.ranking[j]] = [v.ranking[j], v.ranking[i]];
+			}
+		}
+		out.append(el("h2", null, "Rank the witnesses by receptiveness"),
+			para("Put the most receptive witness at the top and the least receptive at the bottom. Think about how they talked about the controversy, not whether they were helpful. You score 1 point for each witness in exactly the right place and ½ for each one place off.", "hs-note"));
+		const list = el("ol", { class: "hs-rank" });
+		const render = () => {
+			list.textContent = "";
+			v.ranking.forEach((wid, i) => {
+				const w = wit(wid);
+				const move = d => { const j = i + d; [v.ranking[i], v.ranking[j]] = [v.ranking[j], v.ranking[i]]; render(); };
+				list.appendChild(el("li", { class: "hs-rank-row" },
+					portrait(w, "tiny"), el("span", { class: "hs-name" }, w.name),
+					btn("▲", () => move(-1), "hs-mini", i === 0), btn("▼", () => move(1), "hs-mini", i === v.ranking.length - 1)));
+			});
+		};
+		render();
+		out.append(list, actionRow(btn("Submit ranking", () => { v.rankingDone = true; Engine.play("Ending"); }, "hs-primary")));
+	};
+
+	function rankingScore() {
+		const v = V(), truth = S().ranking_answer;
+		let score = 0;
+		v.ranking.forEach((wid, i) => {
+			const d = Math.abs(truth.indexOf(wid) - i);
+			if (d === 0) score += 1; else if (d === 1) score += 0.5;
+		});
+		return score;
+	}
+	setup.hs_rankingScore = rankingScore;
+
+	view.ending = function (out) {
+		const v = V(), s = S();
+		if (!v.rankingDone) { go(v.solved ? "Ranking" : "Map"); return; }
+		const o = outcome();
+		const rs = rankingScore();
+		const fmt = x => (x % 1 ? x.toFixed(1) : String(x));
+		out.append(el("h2", null, "Debrief"),
+			el("div", { class: "hs-score" },
+				el("div", null, "Verdict: ", el("strong", null, { correct: "solved", right_person_wrong_place: "half right", wrong: "not solved" }[o])),
+				el("div", null, "Major Clues earned: ", el("strong", null, v.majorClues + " of " + s.major_clues.length)),
+				el("div", null, "Receptiveness ranking: ", el("strong", null, fmt(rs) + " of " + s.witnesses.length)),
+				el("div", null, "Follow-up bonus: ", el("strong", null, String(v.bonus))),
+				el("div", null, "Questions used: ", el("strong", null, (s.budget - v.questionsLeft) + " of " + s.budget))));
+		out.appendChild(el("h3", null, "Receptiveness, most to least"));
+		out.appendChild(el("table", { class: "hs-table" },
+			el("tr", null, el("th", null, "Rank"), el("th", null, "Witness"), el("th", null, "Your rank"), el("th", null, "Receptive answers")),
+			s.ranking_answer.map((wid, i) => el("tr", null,
+				el("td", null, String(i + 1)), el("td", null, wit(wid).name),
+				el("td", null, String(v.ranking.indexOf(wid) + 1)),
+				el("td", null, (s.witnesses.length - 1 - i) + " of " + (s.questions.length - 1))))));
+		out.append(el("h3", null, "What really happened"), ...paras(s.puzzle.solution));
+		if (o !== "correct") out.append(el("h3", null, "The full ending"), ...paras(s.endings.correct));
+		out.appendChild(el("h3", null, "The Major Clues"));
+		s.major_clues.forEach(mc => out.appendChild(el("div", { class: "hs-major" },
+			el("div", { class: "hs-major-head" }, el("span", { class: "hs-letter on" }, mc.letter), el("span", null, mc.title)), para(mc.text))));
+		out.appendChild(el("h3", null, "The red herrings, and how each one falls apart"));
+		out.appendChild(el("ul", { class: "hs-notes" }, Object.keys(s.red_herring_sets).map(k =>
+			el("li", null, el("strong", null, s.red_herring_sets[k].title + ": "), s.red_herring_sets[k].resolution))));
+		out.appendChild(actionRow(btn("Play again", () => Engine.restart(), "hs-primary")));
+	};
+
+	/* ---------- sidebar caption ---------- */
+	function caption(out) {
+		const v = V(), s = S();
+		if (!s) return;
+		out.append(el("div", { class: "hs-cap" },
+			v.solved ? el("div", null, "Case submitted") : el("div", null, "Questions left: ", el("strong", null, String(v.questionsLeft))),
+			hearBadge()));
+	}
+
+	setup.hs = { view, go, ask, openWitness, chooseFollowUp, caption, outcome };
+})();
+
+
+:: HearsayStyle [stylesheet]
+:root {
+	--ink: #2a2118; --paper: #f7f1e3; --panel: #fffaf0; --line: #d8ccb2;
+	--accent: #7a2e1f; --accent-2: #2f5d50; --muted: #6d604d; --alert: #8a3b12;
+}
+html, body { background: var(--paper); color: var(--ink); }
+body { font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif; font-size: 17px; line-height: 1.55; }
+#ui-bar { background: #efe5cf; color: var(--ink); border-right: 1px solid var(--line); }
+#ui-bar a, #menu-core a, #menu-story a { color: var(--accent); }
+#ui-bar-toggle, #ui-bar-history [id|=history] { color: var(--ink); border-color: var(--line); }
+#menu li a { color: var(--accent); }
+#menu li a:hover { background: #e4d6b8; color: var(--ink); }
+#menu ul { border-color: var(--line); }
+#menu li:not(:first-child) { border-top-color: var(--line); }
+#story { margin-right: 2em; }
+#passages { max-width: 60em; }
+.passage { font-size: 1em; }
+h1, h2, h3 { font-family: Georgia, serif; color: var(--ink); }
+h2 { margin-top: .4em; }
+h3 { margin-top: 1.4em; font-size: 1.1em; color: var(--accent); }
+.hs-note { color: var(--muted); font-size: .95em; }
+.hs-title { text-align: center; margin: 1em 0; }
+.hs-series { letter-spacing: .15em; text-transform: uppercase; font-size: .8em; color: var(--muted); }
+.hs-title h1 { font-size: 2.4em; margin: .2em 0; }
+.hs-pitch { max-width: 40em; margin: 0 auto; }
+.hs-map { width: 100%; max-width: 900px; display: block; margin: 1em auto; border: 1px solid var(--line); border-radius: 6px; }
+blockquote { margin: 1em 0; padding: .6em 1em; background: var(--panel); border-left: 4px solid var(--accent); }
+.hs-clause { font-style: italic; }
+.hs-mystery { font-weight: bold; }
+.hs-btn, .hs-choice, .hs-card { font-family: inherit; font-size: 1em; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.hs-btn { padding: .5em 1em; margin: .25em .4em .25em 0; }
+.hs-btn:hover:not([disabled]), .hs-choice:hover, .hs-card:hover { border-color: var(--accent); background: #fff; }
+.hs-btn[disabled] { opacity: .45; cursor: not-allowed; }
+.hs-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.hs-primary:hover:not([disabled]) { background: #5e2317; color: #fff; }
+.hs-follow { border-color: var(--accent-2); color: var(--accent-2); font-weight: bold; }
+.hs-solve { border-style: dashed; }
+.hs-actions { margin-top: 1.4em; display: flex; flex-wrap: wrap; }
+.hs-status { display: flex; justify-content: space-between; align-items: center; padding: .4em .8em; margin-bottom: 1em; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.hs-hear { display: inline-flex; gap: .3em; }
+.hs-letter { display: inline-block; width: 1.7em; height: 1.7em; line-height: 1.7em; text-align: center; border: 1px solid var(--line); border-radius: 4px; color: #c2b69c; font-weight: bold; font-family: Georgia, serif; }
+.hs-letter.on { background: var(--accent-2); color: #fff; border-color: var(--accent-2); }
+.hs-letter.big { width: 2.2em; height: 2.2em; line-height: 2.2em; font-size: 1.2em; }
+.hs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15em, 1fr)); gap: .8em; }
+.hs-card { display: flex; gap: .7em; text-align: left; padding: .6em; align-items: flex-start; }
+.hs-card.closed { opacity: .55; }
+.hs-name { font-weight: bold; }
+.hs-role, .hs-loc, .hs-state { font-size: .88em; color: var(--muted); }
+.hs-state { margin-top: .3em; color: var(--accent-2); }
+.hs-portrait { width: 11em; height: auto; border-radius: 6px; border: 1px solid var(--line); flex-shrink: 0; }
+.hs-portrait.small { width: 4.5em; }
+.hs-portrait.tiny { width: 2.4em; vertical-align: middle; }
+.hs-profile { display: flex; gap: 1.2em; align-items: flex-start; }
+.hs-profile h2 { margin: 0 0 .2em; }
+.hs-cardtext { margin-top: .6em; }
+.hs-questions { margin-top: 1em; }
+.hs-q { margin: .4em 0; }
+.hs-qbtn { width: 100%; text-align: left; margin: 0; }
+.hs-qbtn.done { color: var(--muted); }
+.hs-transcript { margin: .3em 0 .8em 1em; padding-left: .8em; border-left: 2px solid var(--line); font-size: .95em; }
+.hs-exchange { display: flex; gap: 1em; align-items: flex-start; }
+.hs-asked { color: var(--muted); font-size: .9em; }
+.hs-question { font-style: italic; font-size: 1.05em; }
+.hs-answer { margin: 1em 0; padding: 1em 1.2em; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.hs-answer.trip { border-color: var(--alert); }
+.hs-alert { margin: 1em 0; padding: .6em 1em; border-left: 4px solid var(--alert); background: #fbeee4; color: var(--alert); }
+.hs-choices { display: grid; gap: .8em; margin-top: 1em; }
+.hs-choice { text-align: left; padding: 1em; line-height: 1.5; }
+.hs-major { margin: .8em 0; padding: .8em 1em; background: #eef4f1; border: 1px solid #b9d0c7; border-radius: 6px; }
+.hs-major-head { display: flex; align-items: center; gap: .6em; font-weight: bold; }
+.hs-why { font-style: italic; }
+.hs-notes li { margin: .4em 0; }
+.hs-src { color: var(--muted); font-size: .88em; }
+.hs-label { display: block; margin: 1em 0; font-weight: bold; }
+.hs-select { display: block; margin-top: .3em; font-family: inherit; font-size: 1em; padding: .4em; max-width: 100%; background: #fff; color: var(--ink); border: 1px solid var(--line); }
+.hs-ending { padding: 1em 1.2em; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); }
+.hs-ending.correct { border-color: var(--accent-2); }
+.hs-rank { padding-left: 1.5em; }
+.hs-rank-row { margin: .3em 0; }
+.hs-rank-row .hs-name { display: inline-block; min-width: 10em; margin: 0 .6em; }
+.hs-mini { padding: .1em .6em; margin: 0 .2em; }
+.hs-score { padding: .8em 1em; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.hs-table { border-collapse: collapse; width: 100%; }
+.hs-table th, .hs-table td { border-bottom: 1px solid var(--line); padding: .35em .5em; text-align: left; }
+.hs-hearlist dt { margin-top: .8em; font-weight: bold; }
+.hs-hearlist dd { margin-left: 2.4em; }
+.hs-cap { margin-bottom: 1em; }
+.hs-cap-title { font-weight: bold; margin-bottom: .3em; }
+.hs-cap .hs-hear { margin-top: .4em; }
+@media (max-width: 40em) {
+	body { font-size: 16px; }
+	#story { margin: 0; padding: 0 16px; }
+	.hs-profile, .hs-exchange { flex-direction: column; }
+	.hs-portrait { width: 8em; }
+}
